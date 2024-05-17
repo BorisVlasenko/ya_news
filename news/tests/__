@@ -1,0 +1,128 @@
+class TestRoutes(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        all_news = []
+        for index in range(settings.NEWS_COUNT_ON_HOME_PAGE + 1):
+            news = News(title=f'Новость {index}', text='Просто текст.')
+            all_news.append(news)
+        News.objects.bulk_create(all_news)
+
+        # Создаём двух пользователей с разными именами:
+        cls.author = User.objects.create(username='Лев Толстой')
+        cls.reader = User.objects.create(username='Читатель простой')
+        # От имени одного пользователя создаём комментарий к новости:
+        cls.news = News.objects.all().first()
+        cls.comment = Comment.objects.create(
+            news=cls.news,
+            author=cls.author,
+            text='Текст комментария'
+        )
+
+    def test_home_page(self):
+        # Вызываем метод get для клиента (self.client)
+        # и загружаем главную страницу.
+        response = self.client.get('/')
+        # Проверяем, что код ответа равен 200.
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+
+    def test_pages_availability(self):
+        urls = (
+            ('news:home', None),
+            ('news:detail', (self.news.id,)),
+            ('users:login', None),
+            ('users:logout', None),
+            ('users:signup', None),
+        )
+        for name, args in urls:
+            with self.subTest(name=name):
+                url = reverse(name, args=args)
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, HTTPStatus.OK)
+
+    def test_availability_for_comment_edit_and_delete(self):
+        users_statuses = (
+            (self.author, HTTPStatus.OK),
+            (self.reader, HTTPStatus.NOT_FOUND),
+        )
+        for user, status in users_statuses:
+            # Логиним пользователя в клиенте:
+            self.client.force_login(user)
+            # Для каждой пары "пользователь - ожидаемый ответ"
+            # перебираем имена тестируемых страниц:
+            for name in ('news:edit', 'news:delete'):
+                with self.subTest(user=user, name=name):
+                    url = reverse(name, args=(self.comment.id,))
+                    response = self.client.get(url)
+                    self.assertEqual(response.status_code, status)
+
+    def test_redirect_for_anonymous_client(self):
+        # Сохраняем адрес страницы логина:
+        login_url = reverse('users:login')
+        # В цикле перебираем имена страниц, с которых ожидаем редирект:
+        for name in ('news:edit', 'news:delete'):
+            with self.subTest(name=name):
+                # Получаем адрес страницы редактирования или удаления комментария:
+                url = reverse(name, args=(self.comment.id,))
+                # Получаем ожидаемый адрес страницы логина,
+                # на который будет перенаправлен пользователь.
+                # Учитываем, что в адресе будет параметр next, в котором передаётся
+                # адрес страницы, с которой пользователь был переадресован.
+                redirect_url = f'{login_url}?next={url}'
+                response = self.client.get(url)
+                # Проверяем, что редирект приведёт именно на указанную ссылку.
+                self.assertRedirects(response, redirect_url)
+
+
+class TestHomePage(TestCase):
+    # Вынесем ссылку на домашнюю страницу в атрибуты класса.
+    HOME_URL = reverse('news:home')
+
+    @classmethod
+    def setUpTestData(cls):
+        all_news = [
+            News(title=f'Новость {index}', text='Просто текст.')
+            for index in range(settings.NEWS_COUNT_ON_HOME_PAGE + 1)
+        ]
+        News.objects.bulk_create(all_news)
+
+    def test_news_count(self):
+        # Загружаем главную страницу.
+        response = self.client.get(self.HOME_URL)
+        # Код ответа не проверяем, его уже проверили в тестах маршрутов.
+        # Получаем список объектов из словаря контекста.
+        object_list = response.context['object_list']
+        # Определяем количество записей в списке.
+        news_count = object_list.count()
+        # Проверяем, что на странице именно 10 новостей.
+        self.assertEqual(news_count, settings.NEWS_COUNT_ON_HOME_PAGE)
+
+
+class TestHomePage2(TestCase):
+    HOME_URL = reverse('news:home')
+
+    @classmethod
+    def setUpTestData(cls):
+        # Вычисляем текущую дату.
+        today = datetime.today()
+        all_news = [
+            News(
+                title=f'Новость {index}',
+                text='Просто текст.',
+                # Для каждой новости уменьшаем дату на index дней от today,
+                # где index - счётчик цикла.
+                date=today - timedelta(days=index)
+            )
+            for index in range(settings.NEWS_COUNT_ON_HOME_PAGE + 1)
+        ]
+        News.objects.bulk_create(all_news)
+
+    def test_news_order(self):
+        response = self.client.get(self.HOME_URL)
+        object_list = response.context['object_list']
+        # Получаем даты новостей в том порядке, как они выведены на странице.
+        all_dates = [news.date for news in object_list]
+        # Сортируем полученный список по убыванию.
+        sorted_dates = sorted(all_dates, reverse=True)
+        # Проверяем, что исходный список был отсортирован правильно.
+        self.assertEqual(all_dates, sorted_dates)
